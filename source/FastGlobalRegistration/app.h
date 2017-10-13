@@ -43,8 +43,8 @@
 using namespace Eigen;
 using namespace std;
 
-typedef vector<Vector3f> Points;
-typedef vector<VectorXf> Feature;
+typedef vector<Vector3d> Points;
+typedef vector<VectorXd> Feature;
 
 class CApp{
 public:
@@ -53,14 +53,15 @@ public:
 	void NormalizePoints();
 	void AdvancedMatching();
 	void WriteTrans(const char* filepath);
-    Matrix4f GetTrans();
+    Matrix4d GetTrans();
 	double OptimizePairwise(bool decrease_mu_, int numIter_);
+	double GetInlierFraction(int i, int j, const Eigen::Matrix4d& T);
 
 private:
 	// containers
 	vector<Points> pointcloud_;
 	vector<Feature> features_;
-	Matrix4f TransOutput_;
+	Matrix4d TransOutput_;
 	vector<pair<int, int>> corres_;
 
 	// for normalization
@@ -70,10 +71,10 @@ private:
 
 	// some internal functions
 	void ReadFeature(const char* filepath, Points& pts, Feature& feat);
-
+	template <typename T>
+	flann::Index<flann::L2<float>> BuildFLANNTree(const T& datavec);
+	template <typename T>
 	void SearchFLANNTree(flann::Index<flann::L2<float>>* index,
-		VectorXf& input,
-		std::vector<int>& indices,
-		std::vector<float>& dists,
-		int nn);
+			const T& input, std::vector<int>& indices,
+			std::vector<float>& dists, int nn);
 };

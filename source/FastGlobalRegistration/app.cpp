@@ -34,7 +34,7 @@ void CApp::ReadFeature(const char* filepath)
 	Points pts;
 	Feature feat;
 	ReadFeature(filepath, pts, feat);
-	LoadFeature(pts,feat);
+	LoadFeature(pts, feat);
 }
 
 void CApp::LoadFeature(const Points& pts, const Feature& feat)
@@ -54,25 +54,47 @@ void CApp::ReadFeature(const char* filepath, Points& pts, Feature& feat)
 
 	// read from feature file and fill out pts and feat
 	for (int v = 0; v < nvertex; v++)	{
-
 		Vector3f pts_v;
 		fread(&pts_v(0), sizeof(float), 3, fid);
-
 		VectorXf feat_v(ndim);
 		fread(&feat_v(0), sizeof(float), ndim, fid);
-
-		pts.push_back(pts_v);
-		feat.push_back(feat_v);
+		pts.push_back(pts_v.cast<double>());
+		feat.push_back(feat_v.cast<double>());
 	}
 	fclose(fid);
 	printf("done.\n");
 }
 
+template <typename T>
+flann::Index<flann::L2<float>> CApp::BuildFLANNTree(const T& datavec)
+{
+	int rows, dim;
+	rows = datavec.size();
+	dim = datavec[0].size();
+
+	std::vector<float> dataset(rows * dim);
+	flann::Matrix<float> dataset_mat(&dataset[0], rows, dim);
+
+	for (int i = 0; i < rows; i++)
+		for (int j = 0; j < dim; j++)
+			dataset[i * dim + j] = datavec[i][j];
+
+	flann::Index<flann::L2<float>> feature_tree(dataset_mat,
+			flann::KDTreeSingleIndexParams(15));
+	feature_tree.buildIndex();
+
+	return std::move(feature_tree);
+}
+
+template flann::Index<flann::L2<float>> CApp::BuildFLANNTree<Points>(
+		const Points& datavec);
+template flann::Index<flann::L2<float>> CApp::BuildFLANNTree<Feature>(
+		const Feature& datavec);
+
+template <typename T>
 void CApp::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
-							VectorXf& input,
-							std::vector<int>& indices,
-							std::vector<float>& dists,
-							int nn)
+		const T& input, std::vector<int>& indices,
+		std::vector<float>& dists, int nn)
 {
 	int rows_t = 1;
 	int dim = input.size();
@@ -88,8 +110,16 @@ void CApp::SearchFLANNTree(flann::Index<flann::L2<float>>* index,
 	flann::Matrix<int> indices_mat(&indices[0], rows_t, nn);
 	flann::Matrix<float> dists_mat(&dists[0], rows_t, nn);
 
-	index->knnSearch(query_mat, indices_mat, dists_mat, nn, flann::SearchParams(128));
+	index->knnSearch(query_mat, indices_mat, dists_mat, nn,
+			flann::SearchParams(128));
 }
+
+template void CApp::SearchFLANNTree<Vector3d>(
+		flann::Index<flann::L2<float>>* index, const Vector3d& input,
+		std::vector<int>& indices, std::vector<float>& dists, int nn);
+template void CApp::SearchFLANNTree<VectorXd>(
+		flann::Index<flann::L2<float>>* index, const VectorXd& input,
+		std::vector<int>& indices, std::vector<float>& dists, int nn);
 
 void CApp::AdvancedMatching()
 {
@@ -114,34 +144,9 @@ void CApp::AdvancedMatching()
 	/// BUILD FLANNTREE
 	///////////////////////////
 
-	// build FLANNTree - fi
-	int rows, dim;
-	rows = features_[fi].size();
-	dim = features_[fi][0].size();
-
-	std::vector<float> dataset_fi(rows * dim);
-	flann::Matrix<float> dataset_mat_fi(&dataset_fi[0], rows, dim);
-
-	for (int i = 0; i < rows; i++)
-		for (int j = 0; j < dim; j++)
-			dataset_fi[i * dim + j] = features_[fi][i][j];
-
-	flann::Index<flann::L2<float>> feature_tree_i(dataset_mat_fi, flann::KDTreeSingleIndexParams(15));
-	feature_tree_i.buildIndex();
-
-	// build FLANNTree - fj
-	rows = features_[fj].size();
-	dim = features_[fj][0].size();
-
-	std::vector<float> dataset_fj(rows * dim);
-	flann::Matrix<float> dataset_mat_fj(&dataset_fj[0], rows, dim);
-
-	for (int i = 0; i < rows; i++)
-		for (int j = 0; j < dim; j++)
-			dataset_fj[i * dim + j] = features_[fj][i][j];
-
-	flann::Index<flann::L2<float>> feature_tree_j(dataset_mat_fj, flann::KDTreeSingleIndexParams(15));
-	feature_tree_j.buildIndex();
+	// build FLANNTrees
+	auto feature_tree_i = BuildFLANNTree(features_[fi]);
+	auto feature_tree_j = BuildFLANNTree(features_[fj]);
 
 	bool crosscheck = true;
 	bool tuple = true;
@@ -158,7 +163,6 @@ void CApp::AdvancedMatching()
 	///////////////////////////
 	/// INITIAL MATCHING
 	///////////////////////////
-
 	std::vector<int> i_to_j(nPti, -1);
 	for (int j = 0; j < nPtj; j++)
 	{
@@ -272,18 +276,18 @@ void CApp::AdvancedMatching()
 			idj2 = corres[rand2].second;
 
 			// collect 3 points from i-th fragment
-			Eigen::Vector3f pti0 = pointcloud_[fi][idi0];
-			Eigen::Vector3f pti1 = pointcloud_[fi][idi1];
-			Eigen::Vector3f pti2 = pointcloud_[fi][idi2];
+			Eigen::Vector3d pti0 = pointcloud_[fi][idi0];
+			Eigen::Vector3d pti1 = pointcloud_[fi][idi1];
+			Eigen::Vector3d pti2 = pointcloud_[fi][idi2];
 
 			float li0 = (pti0 - pti1).norm();
 			float li1 = (pti1 - pti2).norm();
 			float li2 = (pti2 - pti0).norm();
 
 			// collect 3 points from j-th fragment
-			Eigen::Vector3f ptj0 = pointcloud_[fj][idj0];
-			Eigen::Vector3f ptj1 = pointcloud_[fj][idj1];
-			Eigen::Vector3f ptj2 = pointcloud_[fj][idj2];
+			Eigen::Vector3d ptj0 = pointcloud_[fj][idj0];
+			Eigen::Vector3d ptj1 = pointcloud_[fj][idj1];
+			Eigen::Vector3d ptj2 = pointcloud_[fj][idj2];
 
 			float lj0 = (ptj0 - ptj1).norm();
 			float lj1 = (ptj1 - ptj2).norm();
@@ -337,13 +341,13 @@ void CApp::NormalizePoints()
 		float max_scale = 0;
 
 		// compute mean
-		Vector3f mean;
+		Vector3d mean;
 		mean.setZero();
 
 		int npti = pointcloud_[i].size();
 		for (int ii = 0; ii < npti; ++ii)
 		{
-			Eigen::Vector3f p(pointcloud_[i][ii](0), pointcloud_[i][ii](1), pointcloud_[i][ii](2));
+			Eigen::Vector3d p(pointcloud_[i][ii](0), pointcloud_[i][ii](1), pointcloud_[i][ii](2));
 			mean = mean + p;
 		}
 		mean = mean / npti;
@@ -361,7 +365,7 @@ void CApp::NormalizePoints()
 		// compute scale
 		for (int ii = 0; ii < npti; ++ii)
 		{
-			Eigen::Vector3f p(pointcloud_[i][ii](0), pointcloud_[i][ii](1), pointcloud_[i][ii](2));
+			Eigen::Vector3d p(pointcloud_[i][ii](0), pointcloud_[i][ii](1), pointcloud_[i][ii](2));
 			float temp = p.norm(); // because we extract mean in the previous stage.
 			if (temp > max_scale)
 				max_scale = temp;
@@ -399,7 +403,7 @@ double CApp::OptimizePairwise(bool decrease_mu_, int numIter_)
 
 	double par;
 	int numIter = numIter_;
-	TransOutput_ = Eigen::Matrix4f::Identity();
+	TransOutput_ = Eigen::Matrix4d::Identity();
 
 	par = StartScale;
 
@@ -418,7 +422,7 @@ double CApp::OptimizePairwise(bool decrease_mu_, int numIter_)
 
 	std::vector<double> s(corres_.size(), 1.0);
 
-	Eigen::Matrix4f trans;
+	Eigen::Matrix4d trans;
 	trans.setIdentity();
 
 	for (int itr = 0; itr < numIter; itr++) {
@@ -444,10 +448,10 @@ double CApp::OptimizePairwise(bool decrease_mu_, int numIter_)
 		for (int c = 0; c < corres_.size(); c++) {
 			int ii = corres_[c].first;
 			int jj = corres_[c].second;
-			Eigen::Vector3f p, q;
+			Eigen::Vector3d p, q;
 			p = pointcloud_[i][ii];
 			q = pcj_copy[jj];
-			Eigen::Vector3f rpq = p - q;
+			Eigen::Vector3d rpq = p - q;
 
 			int c2 = c;
 
@@ -493,13 +497,13 @@ double CApp::OptimizePairwise(bool decrease_mu_, int numIter_)
 			* Eigen::AngleAxisd(result(0), Eigen::Vector3d::UnitX());
 		aff_mat.translation() = Eigen::Vector3d(result(3), result(4), result(5));
 
-		Eigen::Matrix4f delta = aff_mat.matrix().cast<float>();
+		Eigen::Matrix4d delta = aff_mat.matrix();
 
 		trans = delta * trans;
 
 		// transform point clouds
-		Matrix3f R = delta.block<3, 3>(0, 0);
-		Vector3f t = delta.block<3, 1>(0, 3);
+		Matrix3d R = delta.block<3, 3>(0, 0);
+		Vector3d t = delta.block<3, 1>(0, 3);
 		for (int cnt = 0; cnt < npcj; cnt++)
 			pcj_copy[cnt] = R * pcj_copy[cnt] + t;
 
@@ -509,23 +513,23 @@ double CApp::OptimizePairwise(bool decrease_mu_, int numIter_)
 	return par;
 }
 
-Eigen::Matrix4f CApp::GetTrans()
+Eigen::Matrix4d CApp::GetTrans()
 {
-    Eigen::Matrix3f R;
-	Eigen::Vector3f t;
+    Eigen::Matrix3d R;
+	Eigen::Vector3d t;
 	R = TransOutput_.block<3, 3>(0, 0);
 	t = TransOutput_.block<3, 1>(0, 3);
 
-	Eigen::Matrix4f transtemp;
+	Eigen::Matrix4d transtemp;
 	transtemp.fill(0.0f);
 
 	transtemp.block<3, 3>(0, 0) = R;
 	transtemp.block<3, 1>(0, 3) = -R*Means[1] + t*GlobalScale + Means[0];
 	transtemp(3, 3) = 1;
-    
+
     return transtemp;
 }
-    
+
 void CApp::WriteTrans(const char* filepath)
 {
 	FILE* fid = fopen(filepath, "w");
@@ -535,12 +539,64 @@ void CApp::WriteTrans(const char* filepath)
 	// '2' indicates that there are two point cloud fragments.
 	fprintf(fid, "0 1 2\n");
 
-    Eigen::Matrix4f transtemp = GetTrans();
+    Eigen::Matrix4d transtemp = GetTrans();
 
-	fprintf(fid, "%.10f %.10f %.10f %.10f\n", transtemp(0, 0), transtemp(0, 1), transtemp(0, 2), transtemp(0, 3));
-	fprintf(fid, "%.10f %.10f %.10f %.10f\n", transtemp(1, 0), transtemp(1, 1), transtemp(1, 2), transtemp(1, 3));
-	fprintf(fid, "%.10f %.10f %.10f %.10f\n", transtemp(2, 0), transtemp(2, 1), transtemp(2, 2), transtemp(2, 3));
-	fprintf(fid, "%.10f %.10f %.10f %.10f\n", 0.0f, 0.0f, 0.0f, 1.0f);
+	fprintf(fid, "%.10f %.10f %.10f %.10f\n",
+			transtemp(0, 0), transtemp(0, 1), transtemp(0, 2), transtemp(0, 3));
+	fprintf(fid, "%.10f %.10f %.10f %.10f\n",
+			transtemp(1, 0), transtemp(1, 1), transtemp(1, 2), transtemp(1, 3));
+	fprintf(fid, "%.10f %.10f %.10f %.10f\n",
+			transtemp(2, 0), transtemp(2, 1), transtemp(2, 2), transtemp(2, 3));
+	fprintf(fid, "%.10f %.10f %.10f %.10f\n", 0.0, 0.0, 0.0, 1.0);
 
 	fclose(fid);
+}
+
+double CApp::GetInlierFraction(int i, int j, const Eigen::Matrix4d& T_)
+{
+	Eigen::Matrix4d T = T_;
+	bool swapped = false;
+
+	// Building a tree using a fragment having larger number of point
+	// pointcloud i has always larger number of points
+	if (pointcloud_[j].size() > pointcloud_[i].size())
+	{
+		T = T.inverse();
+		int temp = j;
+		j = i;
+		i = temp;
+		swapped = true;
+	}
+
+	auto pointcloud_tree_i = BuildFLANNTree<Points>(pointcloud_[i]);
+
+	// we don't have this function. Can we make it?
+	// PointCloudT::Ptr pcj_trans(new PointCloudT);
+	// pcl::copyPointCloud(*(pointcloud[fj]), *pcj_trans);
+	// pcl::transformPointCloud(*pcj_trans, *pcj_trans, T);
+	Points pcj_copy;
+	int npcj = pointcloud_[j].size();
+	pcj_copy.resize(npcj);
+	Matrix3d R = T.block<3, 3>(0, 0);
+	Vector3d t = T.block<3, 1>(0, 3);
+	for (int cnt = 0; cnt < npcj; cnt++) {
+		pcj_copy[cnt] = pointcloud_[j][cnt];
+		pcj_copy[cnt] = R * pcj_copy[cnt] + t;
+	}
+
+	std::vector<int> corres_K;
+	std::vector<float> dis;
+	size_t inlier_numbers = 0;
+	double inlier_fraction = 0.0;
+
+	// every points of fj is matched to fi
+	for (int cnt = 0; cnt < pointcloud_[cnt].size(); ++cnt)
+	{
+		SearchFLANNTree(&pointcloud_tree_i, pointcloud_[j][cnt],
+				corres_K, dis, 1);
+		if ((sqrt(dis[0]) / GlobalScale) < MAX_CORR_DIST)
+			inlier_numbers++;
+	}
+	inlier_fraction = (double)(inlier_numbers) / pointcloud_[j].size();
+	return inlier_fraction;
 }
